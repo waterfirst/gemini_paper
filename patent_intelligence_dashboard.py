@@ -120,37 +120,38 @@ class KiprisClient:
     def search_by_applicant(
         self,
         company_query: str,
-        start_date: str,
-        end_date: str,
+        start_date: str,      # YYYYMMDD — Python 측 필터용
+        end_date: str,        # YYYYMMDD — Python 측 필터용
         max_pages: int = 5,
     ) -> List[Dict]:
-        """출원인명으로 공개 특허 검색 (openStartDate ~ openEndDate 기준)"""
+        """
+        KIPRIS getWordSearch로 키워드 검색 후 Python에서 공개일 필터링.
+        openStartDate/openEndDate는 API가 지원하지 않아 제거.
+        """
         endpoint = "/patUtiModInfoSearchSevice/getWordSearch"
         all_patents: List[Dict] = []
 
         for page in range(1, max_pages + 1):
             params = {
-                "word":          company_query,
-                "ServiceKey":    self.api_key,
-                "numOfRows":     "100",
-                "pageNo":        str(page),
-                "patent":        "Y",
-                "utility":       "N",
-                "openStartDate": start_date,
-                "openEndDate":   end_date,
+                "word":       company_query,
+                "ServiceKey": self.api_key,
+                "numOfRows":  "100",
+                "pageNo":     str(page),
+                "patent":     "true",
+                "utility":    "true",
+                "year":       "10",       # 최근 10년치 데이터 대상
             }
             try:
                 resp = self.session.get(
-                    self.base_url + endpoint, params=params, timeout=15
+                    self.base_url + endpoint, params=params, timeout=20
                 )
                 if resp.status_code != 200:
+                    st.warning(f"API 오류 {resp.status_code}: {company_query}")
                     break
-                items = self._parse_xml(resp.content)
-                if not items:
-                    break
-                all_patents.extend(items)
-                if len(items) < 100:
-                    break
+                items = self._parse_xml(resp.content, start_date, end_date)
+                all_patents.extend(items["patents"])
+                if items["page_count"] < 100:
+                    break          # 마지막 페이지
                 time.sleep(0.3)
             except Exception as e:
                 st.warning(f"{company_query} 검색 오류 (페이지 {page}): {e}")
@@ -158,34 +159,57 @@ class KiprisClient:
 
         return all_patents
 
-    def _parse_xml(self, content: bytes) -> List[Dict]:
+    def _parse_xml(self, content: bytes, start_date: str, end_date: str) -> Dict:
+        """
+        XML 파싱 + 공개일(openDate) 기준 Python 필터링.
+        필드명: response.body.items.item  (patentUtilityInfo 아님)
+        초록:   astrtCont  (abstractContent 아님)
+        """
+        result = {"patents": [], "page_count": 0}
         try:
-            d = xmltodict.parse(content)
+            d    = xmltodict.parse(content)
             body = d.get("response", {}).get("body", {})
-            total = int(body.get("totalCount", 0))
-            if total == 0:
-                return []
-            raw = body.get("items", {}).get("patentUtilityInfo", [])
-            if isinstance(raw, dict):
-                raw = [raw]
-            result = []
-            for item in raw:
-                open_date = item.get("openDate", "") or ""
-                if not open_date:          # 공개일 없으면 제외
-                    continue
-                result.append({
+            raw  = body.get("items", {})
+            if not raw:
+                return result
+            items = raw.get("item", [])
+            if not items:
+                return result
+            if isinstance(items, dict):
+                items = [items]
+
+            result["page_count"] = len(items)
+            start_dt = datetime.strptime(start_date, "%Y%m%d")
+            end_dt   = datetime.strptime(end_date,   "%Y%m%d")
+
+            for item in items:
+                # 공개일 또는 출원일로 날짜 확정 (공개일 우선)
+                open_date = (item.get("openDate") or "").strip()
+                app_date  = (item.get("applicationDate") or "").strip()
+                date_str  = open_date if open_date else app_date
+
+                # 날짜 필터 (Python 측)
+                if date_str:
+                    try:
+                        dt = datetime.strptime(date_str[:8], "%Y%m%d")
+                        if dt < start_dt or dt > end_dt:
+                            continue
+                    except Exception:
+                        pass
+
+                result["patents"].append({
                     "applicationNumber": item.get("applicationNumber", ""),
                     "inventionTitle":    item.get("inventionTitle", ""),
                     "applicantName":     item.get("applicantName", ""),
-                    "openDate":          open_date,
-                    "applicationDate":   item.get("applicationDate", ""),
-                    "ipcNumber":         item.get("ipcNumber", "") or "",
+                    "openDate":          open_date or app_date,
+                    "applicationDate":   app_date,
+                    "ipcNumber":         (item.get("ipcNumber") or "").strip(),
                     "registerStatus":    item.get("registerStatus", ""),
-                    "abstract":          item.get("abstractContent", "") or "",
+                    "abstract":          (item.get("astrtCont") or "").strip(),
                 })
-            return result
-        except Exception:
-            return []
+        except Exception as e:
+            st.warning(f"XML 파싱 오류: {e}")
+        return result
 
 
 # ─────────────────────────────────────────────
@@ -275,7 +299,6 @@ class PatentAnalyzer:
         기술별 최근 1개월 공개 건수 vs 이전 11개월 월평균 비교
         threshold_pct 이상이면 Strategic Spike, 150% 이상이면 Emerging Signal
         """
-        now = datetime.now()
         cutoff_1m  = _months_ago(1)
         cutoff_12m = _months_ago(12)
 

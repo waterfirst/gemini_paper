@@ -66,53 +66,66 @@ def search_kipris_patents(
     session  = requests.Session()
     results: List[Dict] = []
 
+    start_dt = datetime.strptime(start_date, "%Y%m%d")
+    end_dt   = datetime.strptime(end_date,   "%Y%m%d")
+
     for page in range(1, max_pages + 1):
         params = {
-            "word":          query,
-            "ServiceKey":    api_key,
-            "numOfRows":     "100",
-            "pageNo":        str(page),
-            "patent":        "Y",
-            "utility":       "N",
-            "openStartDate": start_date,
-            "openEndDate":   end_date,
+            "word":       query,
+            "ServiceKey": api_key,
+            "numOfRows":  "100",
+            "pageNo":     str(page),
+            "patent":     "true",
+            "utility":    "true",
+            "year":       "10",    # 최근 10년치 — openStartDate/End 미지원
         }
         try:
-            resp = session.get(KIPRIS_BASE_URL + endpoint, params=params, timeout=15)
+            resp = session.get(KIPRIS_BASE_URL + endpoint, params=params, timeout=20)
             if resp.status_code != 200:
                 print(f"[WARN] HTTP {resp.status_code} (페이지 {page})", file=sys.stderr)
                 break
 
-            d     = xmltodict.parse(resp.content)
-            body  = d.get("response", {}).get("body", {})
-            total = int(body.get("totalCount", 0))
-            if total == 0:
+            d    = xmltodict.parse(resp.content)
+            body = d.get("response", {}).get("body", {})
+            raw_items = body.get("items", {})
+            if not raw_items:
                 break
-
-            raw = body.get("items", {}).get("patentUtilityInfo", [])
+            raw = raw_items.get("item", [])   # 올바른 필드명: item (patentUtilityInfo 아님)
+            if not raw:
+                break
             if isinstance(raw, dict):
                 raw = [raw]
 
             page_items = []
             for item in raw:
-                open_date = item.get("openDate", "") or ""
-                if not open_date:     # 공개일 없는 항목 제외 (출원/등록 상태)
-                    continue
+                open_date = (item.get("openDate") or "").strip()
+                app_date  = (item.get("applicationDate") or "").strip()
+                date_str  = open_date if open_date else app_date
+
+                # Python 측 날짜 필터
+                if date_str:
+                    try:
+                        dt = datetime.strptime(date_str[:8], "%Y%m%d")
+                        if dt < start_dt or dt > end_dt:
+                            continue
+                    except Exception:
+                        pass
+
                 page_items.append({
                     "applicationNumber": item.get("applicationNumber", ""),
                     "inventionTitle":    item.get("inventionTitle", ""),
                     "applicantName":     item.get("applicantName", ""),
-                    "openDate":          open_date,
-                    "applicationDate":   item.get("applicationDate", ""),
-                    "ipcNumber":         item.get("ipcNumber", "") or "",
+                    "openDate":          open_date or app_date,
+                    "applicationDate":   app_date,
+                    "ipcNumber":         (item.get("ipcNumber") or "").strip(),
                     "registerStatus":    item.get("registerStatus", ""),
-                    "abstract":          item.get("abstractContent", "") or "",
+                    "abstract":          (item.get("astrtCont") or "").strip(),  # 올바른 필드명
                 })
 
             results.extend(page_items)
-            print(f"[INFO] '{query}' 페이지 {page}: {len(page_items)}건", file=sys.stderr)
+            print(f"[INFO] '{query}' 페이지 {page}: {len(raw)}건 수신, {len(page_items)}건 필터", file=sys.stderr)
 
-            if len(page_items) < 100:
+            if len(raw) < 100:
                 break
             time.sleep(0.3)
 
