@@ -17,7 +17,10 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
+
+def _months_ago(n: int) -> datetime:
+    """n개월 전 datetime 반환 (내장 timedelta 사용, dateutil 불필요)"""
+    return datetime.now() - timedelta(days=int(n * 30.44))
 from typing import Dict, List, Optional, Tuple
 import json
 import time
@@ -194,10 +197,10 @@ class PatentAnalyzer:
         """공개일 기준으로 1/3/6/12개월 버킷 분류"""
         now = datetime.now()
         cutoffs = {
-            "1개월":  now - relativedelta(months=1),
-            "3개월":  now - relativedelta(months=3),
-            "6개월":  now - relativedelta(months=6),
-            "12개월": now - relativedelta(months=12),
+            "1개월":  _months_ago(1),
+            "3개월":  _months_ago(3),
+            "6개월":  _months_ago(6),
+            "12개월": _months_ago(12),
         }
         buckets: Dict[str, List[Dict]] = {k: [] for k in cutoffs}
         for p in patents:
@@ -273,8 +276,8 @@ class PatentAnalyzer:
         threshold_pct 이상이면 Strategic Spike, 150% 이상이면 Emerging Signal
         """
         now = datetime.now()
-        cutoff_1m  = now - relativedelta(months=1)
-        cutoff_12m = now - relativedelta(months=12)
+        cutoff_1m  = _months_ago(1)
+        cutoff_12m = _months_ago(12)
 
         # 기술 카테고리별 날짜 리스트
         tech_dates: Dict[str, List[datetime]] = {k: [] for k in TECH_KEYWORDS}
@@ -1002,7 +1005,7 @@ def main():
     if run_btn:
         months      = PERIOD_MONTHS[period]
         end_dt      = datetime.now()
-        start_dt    = end_dt - relativedelta(months=months)
+        start_dt    = end_dt - timedelta(days=int(months * 30.44))
         start_str   = start_dt.strftime("%Y%m%d")
         end_str     = end_dt.strftime("%Y%m%d")
 

@@ -12,8 +12,10 @@ import time
 import re
 import requests
 import xmltodict
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
+from datetime import datetime, timedelta
+
+def _months_ago(n: int) -> datetime:
+    return datetime.now() - timedelta(days=int(n * 30.44))
 from typing import Dict, List
 
 try:
@@ -151,8 +153,8 @@ def detect_spikes(patents: List[Dict], threshold_pct: float = 200.0) -> List[Dic
     150% 이상         → 'Emerging Signal'
     """
     now        = datetime.now()
-    cutoff_1m  = now - relativedelta(months=1)
-    cutoff_12m = now - relativedelta(months=12)
+    cutoff_1m  = _months_ago(1)
+    cutoff_12m = _months_ago(12)
 
     tech_dates: Dict[str, list] = {k: [] for k in TECH_KEYWORDS}
 
@@ -212,7 +214,7 @@ def run_analysis(
 ) -> Dict:
     """기업 목록에 대해 KIPRIS 검색 + Spike 분석 수행 후 결과 반환"""
     end_dt    = datetime.now()
-    start_dt  = end_dt - relativedelta(months=period_months)
+    start_dt  = end_dt - timedelta(days=int(period_months * 30.44))
     start_str = start_dt.strftime("%Y%m%d")
     end_str   = end_dt.strftime("%Y%m%d")
 
